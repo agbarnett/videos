@@ -1,0 +1,561 @@
+---
+title: "Analysis of video surveys from CANDOUR project. Version using odds ratios."
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+header-includes:
+ - \usepackage{rotating}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi=500)
+library(tidyverse)
+#library(stargazer)
+#library(kableExtra)
+#library(viridis)
+#library(viridisLite)
+library(hrbrthemes)
+#library(readxl)
+library(estimatr)
+library(Matching)
+library(nnet)
+library(dplyr)
+options(dplyr.summarise.inform=FALSE) # remove annoying warning
+library(conflicted)
+#library(plyr)
+library(dplyr) #
+library(flextable)
+library(binom) # for confidence intervals
+library(xtable)
+#library(INLA) # For Bayes models
+#library(R2WinBUGS) # For Bayes models
+#bugs_loc = "c:/Program Files/WinBUGS14"
+source('99_functions.R')
+
+select <- dplyr::select
+conflict_prefer("filter", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("recode", "dplyr")
+
+# get the data from 0_read_data.R
+load('data/analysis_ready.RData')
+```
+
+
+## Baseline comparison table
+
+The total number of responses is `r nrow(pretest_final)`.
+
+### a) categorical variables, cells show counts and percents
+
+```{r}
+cat_table = select(pretest_final, Treatment2, pool, gender, Education, Race) %>%
+  pivot_longer(cols=c('pool','gender','Education','Race')) %>%
+  mutate(
+    value = ifelse(is.na(value), 'Missing', value)) %>% # flag missing
+  group_by(Treatment2, name, value) %>%
+  tally() %>%
+  group_by(Treatment2, name) %>%
+  mutate(percent = round(100*prop.table(n)), # calculate percent
+         cell = paste(n, ' (', percent, ')', sep='')) %>%
+  ungroup() %>%
+  select(Treatment2, name, value, cell) %>%
+  pivot_wider(names_from=Treatment2, values_from=cell) %>%
+  dplyr::arrange(name, value)
+ftab = flextable(cat_table) %>%
+  theme_box() %>%
+  fontsize(size=10, part='all') %>%
+  autofit() %>%
+  merge_v(j=1) 
+ftab
+```
+
+### b) Continuous variables, cells show median and inter-quartile range
+
+```{r}
+cont_table = select(pretest_final, Treatment2, Trumppercent, age) %>%
+  mutate(Trumppercent = Trumppercent*100) %>% # from proportion to percent
+  pivot_longer(cols=c('Trumppercent','age')) %>%
+  group_by(Treatment2, name) %>%
+  dplyr::summarise(N = n(), 
+                   missing = sum(is.na(value)), 
+                   median = median(value, na.rm=TRUE),
+                   lower = quantile(value, na.rm=TRUE, 0.25),
+                   upper = quantile(value, na.rm=TRUE, 0.75),
+                   median = round(median),
+                   lower = round(lower),
+                   upper = round(upper)) %>%
+  ungroup() %>%
+  mutate(cell = paste(median, ' (', lower, ' to ', upper, ')', sep='')) %>%
+  select(Treatment2, name, cell) %>%
+  pivot_wider(names_from=Treatment2, values_from=cell)
+ftab = flextable(cont_table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+```
+
+### Bayesian logistic regression
+
+Here we use a Bayesian logistic regression model with a random intercept for each state and a random intercept for the three sampling pools (Facebook, CloudResearch, Lucid). 
+
+```{r}
+# set up data for bayes model:
+source('1_bayes_model.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_full.RData")
+dic3 = data.frame(pD = pD, DIC = DIC)
+# make estimated probabilities for later plot
+p1 = data.frame(row=1, chain=1, est=output$alpha[1,,1]) %>% mutate(x=1:n())
+p2 = data.frame(row=2, chain=1, est=output$alpha[1,,1] + output$alpha[2,,1]) %>% mutate(x=1:n())
+p3 = data.frame(row=3, chain=1, est=output$alpha[1,,1] + output$alpha[3,,1]) %>% mutate(x=1:n())
+p4 = data.frame(row=1, chain=2, est=output$alpha[1,,2]) %>% mutate(x=1:n())
+p5 = data.frame(row=2, chain=2, est=output$alpha[1,,2] + output$alpha[2,,2]) %>% mutate(x=1:n())
+p6 = data.frame(row=3, chain=2, est=output$alpha[1,,2] + output$alpha[3,,2]) %>% mutate(x=1:n())
+chains = bind_rows(p1, p2, p3, p4, p5, p6) %>%
+  mutate(p = exp(est)/(1+exp(est)))
+
+# absolute difference in probabilities
+abs = select(chains, -est) %>%
+  pivot_wider(values_from = p, names_from = row) %>%
+  mutate(diff1 = `2` - `1`, # cash minus CDC
+         diff2 = `3` - `1`) %>% # lottery minus CDC
+  summarise(m1 = mean(diff1), l1 = quantile(diff1, 0.025), u1 = quantile(diff1, 0.975),
+            m2 = mean(diff2), l2 = quantile(diff2, 0.025), u2 = quantile(diff2, 0.975))
+```
+
+```{r}
+# table of estimates
+table3 = filter(alpha, chain==99)
+table3$Variable = colnames(X)
+table = select(table3, 'Variable', 'mean', 'lower', 'upper', 'pvalue') %>%
+  filter(!str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+     Variable = nice_rename(Variable),
+     OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep='')) %>%
+  select(Variable, OR, CI, pvalue)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "model3.tex", include.rownames=FALSE)
+```
+
+The table shows the odds ratios, 95% credible intervals, and a Bayesian p-values which estimate the probability that the odds ratio is not equal to 1. 
+
+The absolute difference in probability between the cash voucher and CDC is `r roundz(abs$m1, 2)` with a 95% credible interval from `r roundz(abs$l1, 2)` to `r roundz(abs$u1, 2)`. The absolute difference in probability between the lottery and CDC is `r roundz(abs$m2, 2)` with a 95% credible interval from `r roundz(abs$l2, 2)` to `r roundz(abs$u2, 2)`.
+
+### Plot of random state effects
+
+The plot shows the mean and 95% credible interval.
+
+```{r, fig.height=8}
+to_plot = filter(lambda, chain==99)
+rplot = ggplot(to_plot, aes(x=row, y=exp(mean), ymin=exp(lower), ymax=exp(upper)))+
+  geom_hline(yintercept=1, lty=2)+
+  geom_point()+
+  geom_errorbar(width=0)+
+  scale_x_continuous(breaks=1:50, expand=c(0.01,0.01))+ #
+  xlab('')+
+  ylab('Odds ratio')+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())+
+  coord_flip()
+rplot
+```
+
+The differences between states were small.
+
+### Plot of random pool effects
+
+```{r, fig.height=3}
+to_plot = filter(gamma, chain==99)
+rplot = ggplot(to_plot, aes(x=row, y=exp(mean), ymin=exp(lower), ymax=exp(upper)))+
+  geom_hline(yintercept=1, lty=2)+
+  geom_point()+
+  geom_errorbar(width=0)+
+  scale_x_continuous(breaks=1:3, labels=c('CloudResearch','Facebook','Lucid'))+
+  xlab('')+
+  ylab('Odds ratio')+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())+
+  coord_flip()
+rplot
+```
+
+Facebook users had a higher click-through probability whereas Lucid users had a lower click-through probability.
+
+## Bayesian logistic regression models
+
+The table below shows the results for unadjusted (model 1) and adjusted estimates (models 2 and 3).
+
+```{r}
+## unadjusted
+source('1_bayes_model_unadjusted.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_unadjusted.RData")
+table1 = filter(alpha, chain==99)
+table1$Variable = colnames(X)
+dic1 = data.frame(pD = pD, DIC = DIC)
+
+## adjusted
+source('1_bayes_model_adjusted.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_adjusted.RData")
+table2 = filter(alpha, chain==99)
+table2$Variable = colnames(X)
+dic2 = data.frame(pD = pD, DIC = DIC)
+```
+
+```{r}
+# table of estimates
+table = bind_rows(table1, table2, table3, .id='model') %>%
+  filter(chain == 99) %>%
+  select('model','Variable', 'mean', 'lower', 'upper') %>%
+  filter(!str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+    Variable = nice_rename(Variable),
+    OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    #pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep=''),
+    cell = paste(OR, ' (', CI, ')', sep='')) %>%
+  select(model, Variable, cell) %>%
+  pivot_wider(names_from=model, values_from=cell)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "multiple_models.tex", include.rownames=FALSE)
+```
+
+Model 1 = Treatment only.
+
+Model 2 = Treatment plus predictors.
+
+Model 3 = Treatment plus predictors and random effects for state and pool.
+
+The table below compares the model fit using the DIC.
+
+```{r}
+# table of estimates
+table = bind_rows(dic1, dic2, dic3, .id='model')
+ftab = flextable(table) %>%
+  colformat_num(j=2, digits=1) %>%
+  colformat_num(j=3, digits=0) %>%
+  theme_box() %>%
+  autofit()
+ftab
+```
+
+Model 3 has the largest effective number of parameters (pD), and by far the best model fit (smallest DIC).
+
+## Plot of results by treatment group
+
+```{r}
+## use fully adjusted model
+to_plot = filter(table3, chain==99, row > 1) %>%  # not intercept
+  mutate(mean = exp(mean),
+         lower = exp(lower),
+         upper = exp(upper),
+         col = 1 + as.numeric(row > 3), # for colouring lines
+         col = factor(col)) %>%
+  select(row, Variable, col, mean, lower, upper) 
+#
+xlabels = nice_rename(to_plot$Variable) # labels for x-axis
+#
+plot = ggplot(data=to_plot, aes(x=row, y=mean, ymin=lower, ymax=upper, col=col))+
+  xlab('')+
+  ylab('Odds ratio')+
+  scale_x_reverse(breaks=2:10, labels=xlabels)+
+  geom_hline(yintercept=1, lty=2, size=1.05)+
+  scale_color_manual(NULL, values=c('dodgerblue','darkseagreen3'))+
+  geom_point(size=4)+
+  geom_errorbar(width=0, size=1.04)+
+  coord_flip()+
+  theme_bw()+
+  theme(legend.position='none',
+        panel.grid.minor = element_blank())
+plot
+jpeg('figures/bayes_estimates_OR.jpg', width=4, height=5, units='in', res=600)
+print(plot)
+invisible(dev.off())
+png('figures/logistic_OR.png', width=4.5, height=5.5, units='in', res=600)
+print(plot)
+invisible(dev.off())
+```
+
+The "CDC Health Information" is the reference group.
+
+## Treatment interactions
+
+### a) Gender interaction
+
+The table below shows the main effects and interaction for the gender by treatment interaction. The other variables (e.g., age) were also adjusted for.
+
+```{r}
+## 
+source('1_bayes_model_gender_interaction.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_male.RData")
+table = filter(alpha, chain==99) 
+table$Variable = colnames(X)
+#
+table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+    Variable = nice_rename(Variable),
+    Variable = ifelse(Variable=='int1', 'Male x cash voucher', Variable),
+    Variable = ifelse(Variable=='int2', 'Male x lottery', Variable),
+    OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep='')) %>%
+  select(Variable, OR, CI, pvalue)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "table_gender_interaction.tex", include.rownames=FALSE)
+```
+
+The reference gender for race is "non-male".
+
+```{r, include=FALSE}
+## construct probabilities by gender
+#formula = clicked ~ trt2_c + trt2_l + male + int1 + int2 + ...
+#int1 =trt2_c*male, # make interactions
+#int2 =trt2_l*male
+# make table of what chains to use
+design = read.table(header=TRUE, sep=',', stringsAsFactors = FALSE, text='
+Gender,Treatment,x1,x2,x3,x4,x5,x6
+Female,control,1,0,0,0,0,0
+Male,control,1,0,0,1,0,0
+Female,cash,1,1,0,0,0,0
+Male,cash,1,1,0,1,1,0
+Female,lottery,1,0,1,0,0,0
+Male,lottery,1,0,1,1,0,1')
+ests_gender = make_ests(design = design, chains = output$alpha, type='OR')
+#
+```
+
+### b) Race interaction
+
+The table below shows the main effects and interaction for the race by treatment interaction. The other variables (e.g., age) were also adjusted for.
+
+```{r}
+## 
+source('1_bayes_model_race_interaction.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_race.RData")
+table = filter(alpha, chain==99) 
+table$Variable = colnames(X)
+#
+table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+    Variable = nice_rename(Variable),
+    Variable = ifelse(Variable=='int1', 'Other race x cash voucher', Variable),
+    Variable = ifelse(Variable=='int2', 'Other race x lottery', Variable),
+    Variable = ifelse(Variable=='int3', 'Black race x cash voucher', Variable),
+    Variable = ifelse(Variable=='int4', 'Black race x lottery', Variable),
+    OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep='')) %>%
+  select(Variable, OR, CI, pvalue)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "table_race_interaction.tex", include.rownames=FALSE)
+```
+
+The reference group for race is "white".
+
+```{r, include=FALSE}
+## construct probabilities by race
+# formula = clicked ~ trt2_c + trt2_l + race1 + race2 + int1 + int2 + int3 + int4 +
+# int1 = trt2_c*race1, # make interactions
+#                       int2 = trt2_l*race1,
+#                       int3 = trt2_c*race2,
+#                       int4 = trt2_l*race2...
+# make table of what chains to use
+design = read.table(header=TRUE, sep=',', stringsAsFactors = FALSE, text='
+Race,Treatment,x1,x2,x3,x4,x5,x6,x7,x8,x9
+White,control,1,0,0,0,0,0,0,0,0
+Other,control,1,0,0,1,0,0,0,0,0
+Black,control,1,0,0,0,1,0,0,0,0
+White,cash,1,1,0,0,0,0,0,0,0
+Other,cash,1,1,0,1,0,1,0,0,0
+Black,cash,1,1,0,0,1,0,0,1,0
+White,lottery,1,0,1,0,0,0,0,0,0
+Other,lottery,1,0,1,1,0,0,1,0,0
+Black,lottery,1,0,1,0,1,0,0,0,1')
+ests_race = make_ests(design = design, chains = output$alpha, type='OR')
+#
+```
+
+### c) Education interaction
+
+The table below shows the main effects and interaction for the education by treatment interaction. The other variables (e.g., age) were also adjusted for.
+
+```{r}
+## 
+source('1_bayes_model_education_interaction.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_education.RData")
+table = filter(alpha, chain==99) 
+table$Variable = colnames(X)
+#
+table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+    Variable = nice_rename(Variable),
+    Variable = ifelse(Variable=='int1', 'Medium education x cash voucher', Variable),
+    Variable = ifelse(Variable=='int2', 'Medium education x lottery', Variable),
+    Variable = ifelse(Variable=='int3', 'High education x cash voucher', Variable),
+    Variable = ifelse(Variable=='int4', 'High education x lottery', Variable),
+    OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep='')) %>%
+  select(Variable, OR, CI, pvalue)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "table_education_interaction.tex", include.rownames=FALSE)
+```
+
+The reference group for education is "low".
+
+```{r, include=FALSE}
+## construct probabilities by education
+# formula = clicked ~ trt2_c + trt2_l + edu1 + edu2 + int1 + int2 + int3 + int4 +
+# int1 = trt2_c*edu1, # make interactions
+#                       int2 = trt2_l*edu1,
+#                       int3 = trt2_c*edu2,
+#                       int4 = trt2_l*edu2...
+# make table of what chains to use
+design = read.table(header=TRUE, sep=',', stringsAsFactors = FALSE, text='
+Education,Treatment,x1,x2,x3,x4,x5,x6,x7,x8,x9
+Low,control,1,0,0,0,0,0,0,0,0
+Medium,control,1,0,0,1,0,0,0,0,0
+High,control,1,0,0,0,1,0,0,0,0
+Low,cash,1,1,0,0,0,0,0,0,0
+Medium,cash,1,1,0,1,0,1,0,0,0
+High,cash,1,1,0,0,1,0,0,1,0
+Low,lottery,1,0,1,0,0,0,0,0,0
+Medium,lottery,1,0,1,1,0,0,1,0,0
+High,lottery,1,0,1,0,1,0,0,0,1')
+ests_education = make_ests(design = design, chains = output$alpha, type='OR')
+#
+```
+
+## Plot of interaction effects
+
+```{r}
+# combine estimates
+combined = bind_rows(ests_gender, ests_race, ests_education, .id='variable') %>%
+  mutate(
+    trt_num = case_when(
+      Treatment == 'cash' ~ 2,
+      Treatment == 'lottery' ~ 3
+  ),
+  Variable = case_when(
+      variable == 1 ~ "Gender",
+      variable == 2 ~ "Race",
+      variable == 3 ~ "Education"
+  ),
+  label = case_when(
+    variable == 1 ~ Gender,
+    variable == 2 ~ Race,
+    variable == 3 ~ Education
+  )) %>%
+  mutate(labelf = factor(label, levels=c('Female','Male','White','Other','Black','Low','Medium','High'))) # for axis ordering
+cplot = ggplot(data=combined, aes(y=labelf, x=mean, xmin=lower, xmax=upper, col=factor(trt_num))) +
+  geom_vline(lty=2, size=1.05, col='grey', xintercept=1)+
+  geom_point(size=3, position=position_dodge(width=0.25))+
+  geom_errorbarh(size=1.02, height=0, position=position_dodge(width=0.25))+
+  scale_color_manual('Treatment', values=c('dark green','dodgerblue'), labels=c('Cash Voucher','Lottery'))+
+  xlab('Odds ratio')+
+  ylab('')+
+  facet_wrap(~Variable, scales='free_y')+
+  theme_bw()+
+  theme(legend.position='top',
+        panel.grid.minor = element_blank())
+cplot
+jpeg('figures/bayes_interactions_OR.jpg', width=5.5, height=4, units='in', res=600)
+print(cplot)
+invisible(dev.off())
+png('figures/interactions_OR_fixed.png', width=5.5, height=4, units='in', res=600)
+print(cplot)
+invisible(dev.off())
+```
+
+
+## Plot of probability ratios
+
+```{r}
+cplot = ggplot(data=combined, aes(y=labelf, x=prmean, xmin=prlower, xmax=prupper, col=factor(trt_num))) +
+  geom_vline(lty=2, size=1.05, col='grey', xintercept=1)+
+  geom_point(size=3, position=position_dodge(width=0.25))+
+  geom_errorbarh(size=1.02, height=0, position=position_dodge(width=0.25))+
+  scale_color_manual('Treatment', values=c('dark green','dodgerblue'), labels=c('Cash Voucher','Lottery'))+
+  xlab('Probability ratio')+
+  ylab('')+
+  facet_wrap(~Variable, scales='free_y')+
+  theme_bw()+
+  theme(legend.position='top',
+        panel.grid.minor = element_blank())
+cplot
+jpeg('figures/bayes_interactions_PR.jpg', width=5.5, height=4, units='in', res=600)
+print(cplot)
+invisible(dev.off())
+png('figures/interactions_PR_fixed.png', width=5.5, height=4, units='in', res=600)
+print(cplot)
+invisible(dev.off())
+```
+
+## For supplement: check of Bayesian model convergence
+
+```{r}
+#
+load("//hpc-fs/barnetta/vaccine/jags_results_full.RData")
+# prepare data for plot
+p1 = data.frame(row=1, chain=1, est=output$alpha[1,,1]) %>% mutate(x=1:n())
+p2 = data.frame(row=2, chain=1, est=output$alpha[2,,1]) %>% mutate(x=1:n())
+p3 = data.frame(row=3, chain=1, est=output$alpha[3,,1]) %>% mutate(x=1:n())
+p4 = data.frame(row=1, chain=2, est=output$alpha[1,,2]) %>% mutate(x=1:n())
+p5 = data.frame(row=2, chain=2, est=output$alpha[2,,2]) %>% mutate(x=1:n())
+p6 = data.frame(row=3, chain=2, est=output$alpha[3,,2]) %>% mutate(x=1:n())
+chains = bind_rows(p1, p2, p3, p4, p5, p6)  %>% 
+  mutate(facet = case_when(
+    row ==1 ~ "Intercept",
+    row ==2 ~ "Treatment 1",
+    row ==3 ~ "Treatment 2"
+  ))
+#
+cplot = ggplot(data=chains, aes(x=x, y=est, col=factor(chain)))+
+  scale_color_manual('Chain', values=c('skyblue','orange'))+
+  geom_line()+
+  theme_bw()+
+  xlab('')+
+  ylab('logit')+
+  facet_wrap(~facet)
+cplot
+```
+
+The plots show 5,000 samples that were thinned by 5. The burn-in was 5,000. Convergence and mixing look good. These are the estimates from model 3.
