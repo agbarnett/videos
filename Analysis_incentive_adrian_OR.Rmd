@@ -464,11 +464,61 @@ ests_education = make_ests(design = design, chains = output$alpha, type='OR')
 #
 ```
 
+### d) Percent Trump vote
+
+The table below shows the main effects and interaction for the trump vote by treatment interaction. The other variables (e.g., age) were also adjusted for.
+
+```{r}
+## 
+source('1_bayes_model_trump_interaction.R')
+# get results from lyra
+load("//hpc-fs/barnetta/vaccine/jags_results_trump.RData")
+table = filter(alpha, chain==99) 
+table$Variable = colnames(X)
+#
+table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
+  mutate(
+    Variable = nice_rename(Variable),
+    Variable = ifelse(Variable=='int1', 'Trump x cash voucher', Variable),
+    Variable = ifelse(Variable=='int2', 'Trump x lottery', Variable),
+    OR = roundz(exp(mean), 2),
+    lower = roundz(exp(lower), 2),
+    upper = roundz(exp(upper), 2),
+    pvalue = format.pval(pvalue, eps=0.001, digits=2),
+    CI = paste(lower, ' to ', upper, sep='')) %>%
+  select(Variable, OR, CI, pvalue)
+ftab = flextable(table) %>%
+  theme_box() %>%
+  autofit()
+ftab
+# for latex:
+print(xtable(table, type = "latex"), file = "table_trump_interaction.tex", include.rownames=FALSE)
+```
+
+```{r, include=FALSE}
+## construct probabilities by trump vote
+formula = clicked ~ trt2_c + trt2_l + male + int1 + int2 + age_c + Race + Education + trumppercent 
+#int1 =trt2_c*trump, # make interactions
+#int2 =trt2_l*trump
+# make table of what chains to use
+design = read.table(header=TRUE, sep=',', stringsAsFactors = FALSE, text='
+Trump,Treatment,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10
+Average,control,1,0,0,0,0,0,0,0,0,0
+Plus 10%,control,1,0,0,0,0,0,0,0,0,1
+Average,cash,1,1,0,0,0,0,0,0,0,0
+Plus 10%,cash,1,1,0,0,1,0,0,0,0,1
+Average,lottery,1,0,1,0,0,0,0,0,0,0
+Plus 10%,lottery,1,0,1,0,0,1,0,0,0,1')
+ests_trump = make_ests(design = design, chains = output$alpha, type='OR')
+#
+```
+
+
 ## Plot of interaction effects
 
 ```{r}
 # combine estimates
-combined = bind_rows(ests_gender, ests_race, ests_education, .id='variable') %>%
+combined = bind_rows(ests_gender, ests_race, ests_education, ests_trump, .id='variable') %>%
   mutate(
     trt_num = case_when(
       Treatment == 'cash' ~ 2,
@@ -477,14 +527,16 @@ combined = bind_rows(ests_gender, ests_race, ests_education, .id='variable') %>%
   Variable = case_when(
       variable == 1 ~ "Gender",
       variable == 2 ~ "Race",
-      variable == 3 ~ "Education"
+      variable == 3 ~ "Education",
+      variable == 4 ~ "State Trump vote"
   ),
   label = case_when(
     variable == 1 ~ Gender,
     variable == 2 ~ Race,
-    variable == 3 ~ Education
+    variable == 3 ~ Education,
+    variable == 4 ~ Trump
   )) %>%
-  mutate(labelf = factor(label, levels=c('Female','Male','White','Other','Black','Low','Medium','High'))) # for axis ordering
+  mutate(labelf = factor(label, levels=c('Female','Male','White','Other','Black','Low','Medium','High','Average','Plus 10%'))) # for axis ordering
 cplot = ggplot(data=combined, aes(y=labelf, x=mean, xmin=lower, xmax=upper, col=factor(trt_num))) +
   geom_vline(lty=2, size=1.05, col='grey', xintercept=1)+
   geom_point(size=3, position=position_dodge(width=0.25))+
@@ -497,14 +549,29 @@ cplot = ggplot(data=combined, aes(y=labelf, x=mean, xmin=lower, xmax=upper, col=
   theme(legend.position='top',
         panel.grid.minor = element_blank())
 cplot
-jpeg('figures/bayes_interactions_OR.jpg', width=5.5, height=4, units='in', res=600)
+jpeg('figures/bayes_interactions_OR.jpg', width=5.5, height=5, units='in', res=600)
 print(cplot)
 invisible(dev.off())
-png('figures/interactions_OR_fixed.png', width=5.5, height=4, units='in', res=600)
+png('figures/interactions_OR_relative.png', width=5.5, height=5, units='in', res=600)
 print(cplot)
 invisible(dev.off())
 ```
 
+#### Table of odds ratio estimates from above plot
+
+The table below gives the odds ratios and 95% credible intervals shown in the previous plot.
+
+
+```{r}
+to_table = select(combined, Variable, Treatment, labelf, mean, lower, upper) %>%
+  rename('category' = 'labelf')
+ftab = flextable(to_table) %>%
+  merge_v(j=1:2) %>%
+  theme_box() %>%
+  colformat_num(j=4:6, digits=2) %>%
+  autofit()
+ftab
+```
 
 ## Plot of probability ratios
 

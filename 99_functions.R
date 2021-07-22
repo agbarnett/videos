@@ -24,7 +24,7 @@ nice_rename = function(intext){
     str_detect(intext, 'trt2_l') ~ 'Lottery Incentive',
     str_detect(intext, 'age') ~ 'Age (+10 years)',
     str_detect(intext, 'gender|^male') ~ 'Gender = Male',
-    str_detect(intext, 'rumppercent') ~ 'Trump percent (+10%)',
+    str_detect(intext, 'rumppercent') ~ 'State % Trump vote (+10%)',
     is.character(intext) == TRUE ~ as.character(intext)
   )
   return(out)
@@ -32,7 +32,8 @@ nice_rename = function(intext){
 
 ## function to make interaction estimates from chains and design matrix
 # makes probabilities or odds ratios
-make_ests = function(design, chains, type='OR'){
+make_ests = function(design, chains, type='OR', 
+                     ref = 'relative'){ # reference = relative (within-category) or fixed reference group
   design = mutate(design, num = 1:n())
   design_long = pivot_longer(design, cols=starts_with('x')) %>%
     filter(value == 1) %>%
@@ -66,8 +67,8 @@ if(type=='OR'){
   all_combs = NULL 
   for (i in 1:nrow(not_control)){
     numerator = filter(long_chains, num == not_control$num[i])
-    #index = which(control[,1] == not_control[i,1]) # match on variable
-    index = 1 # always first group - THIS IS IMPORTANT, controls reference group, if turned off then reference is relative
+    if(ref=='relative'){index = which(control[,1] == not_control[i,1])} # match on variable
+    if(ref=='fixed'){index = 1} # always first group - THIS IS IMPORTANT, controls reference group, if turned off then reference is relative
     denominator = filter(long_chains, num == index) %>% select(-num)
     comb = left_join(numerator, denominator, by=c('chain','x'))
     all_combs = bind_rows(all_combs, comb)
