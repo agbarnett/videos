@@ -9,34 +9,13 @@ header-includes:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, dpi=500)
 library(tidyverse)
-#library(stargazer)
-#library(kableExtra)
-#library(viridis)
-#library(viridisLite)
-library(hrbrthemes)
-#library(readxl)
-library(estimatr)
-library(Matching)
-library(nnet)
 library(dplyr)
 options(dplyr.summarise.inform=FALSE) # remove annoying warning
-library(conflicted)
-#library(plyr)
 library(dplyr) #
-library(flextable)
+library(flextable) # for nice tables
 library(binom) # for confidence intervals
-library(xtable)
-#library(INLA) # For Bayes models
-#library(R2WinBUGS) # For Bayes models
-#bugs_loc = "c:/Program Files/WinBUGS14"
+library(xtable) # for exporting results to latex
 source('99_functions.R')
-
-select <- dplyr::select
-conflict_prefer("filter", "dplyr")
-conflict_prefer("mutate", "dplyr")
-conflict_prefer("rename", "dplyr")
-conflict_prefer("summarize", "dplyr")
-conflict_prefer("recode", "dplyr")
 
 # get the data from 0_read_data.R
 load('data/analysis_ready.RData')
@@ -50,6 +29,7 @@ The total number of responses is `r nrow(pretest_final)`.
 ### a) categorical variables, cells show counts and percents
 
 ```{r}
+## Table S1 for paper's web appendix ##
 cat_table = select(pretest_final, Treatment2, pool, gender, Education, Race) %>%
   pivot_longer(cols=c('pool','gender','Education','Race')) %>%
   mutate(
@@ -74,6 +54,7 @@ ftab
 ### b) Continuous variables, cells show median and inter-quartile range
 
 ```{r}
+## Table S1 for paper's web appendix ##
 cont_table = select(pretest_final, Treatment2, Trumppercent, age) %>%
   mutate(Trumppercent = Trumppercent*100) %>% # from proportion to percent
   pivot_longer(cols=c('Trumppercent','age')) %>%
@@ -103,10 +84,10 @@ Here we use a Bayesian logistic regression model with a random intercept for eac
 ```{r}
 # set up data for bayes model:
 source('1_bayes_model.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_full.RData")
-dic3 = data.frame(pD = pD, DIC = DIC)
-# make estimated probabilities for later plot
+dic3 = data.frame(pD = pD, DIC = DIC) # deviance information criterion
+# make estimated probabilities from chains for later plot
 p1 = data.frame(row=1, chain=1, est=output$alpha[1,,1]) %>% mutate(x=1:n())
 p2 = data.frame(row=2, chain=1, est=output$alpha[1,,1] + output$alpha[2,,1]) %>% mutate(x=1:n())
 p3 = data.frame(row=3, chain=1, est=output$alpha[1,,1] + output$alpha[3,,1]) %>% mutate(x=1:n())
@@ -198,22 +179,23 @@ The table below shows the results for unadjusted (model 1) and adjusted estimate
 ```{r}
 ## unadjusted
 source('1_bayes_model_unadjusted.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_unadjusted.RData")
 table1 = filter(alpha, chain==99)
 table1$Variable = colnames(X)
-dic1 = data.frame(pD = pD, DIC = DIC)
+dic1 = data.frame(pD = pD, DIC = DIC) # deviance information criterion
 
 ## adjusted
 source('1_bayes_model_adjusted.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_adjusted.RData")
 table2 = filter(alpha, chain==99)
 table2$Variable = colnames(X)
-dic2 = data.frame(pD = pD, DIC = DIC)
+dic2 = data.frame(pD = pD, DIC = DIC) # deviance information criterion
 ```
 
 ```{r}
+## Table S3 for paper's web appendix ##
 # table of estimates
 table = bind_rows(table1, table2, table3, .id='model') %>%
   filter(chain == 99) %>%
@@ -243,10 +225,10 @@ Model 2 = Treatment plus predictors.
 
 Model 3 = Treatment plus predictors and random effects for state and pool.
 
-The table below compares the model fit using the DIC.
+The table below compares the model fit using the DIC (deviance information criterion).
 
 ```{r}
-# table of estimates
+# table of DICs
 table = bind_rows(dic1, dic2, dic3, .id='model')
 ftab = flextable(table) %>%
   colformat_num(j=2, digits=1) %>%
@@ -285,6 +267,7 @@ plot = ggplot(data=to_plot, aes(x=row, y=mean, ymin=lower, ymax=upper, col=col))
   theme(legend.position='none',
         panel.grid.minor = element_blank())
 plot
+## Figure 2 in paper ##
 jpeg('figures/bayes_estimates_OR.jpg', width=4, height=5, units='in', res=600)
 print(plot)
 invisible(dev.off())
@@ -304,7 +287,7 @@ The table below shows the main effects and interaction for the gender by treatme
 ```{r}
 ## 
 source('1_bayes_model_gender_interaction.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_male.RData")
 table = filter(alpha, chain==99) 
 table$Variable = colnames(X)
@@ -320,6 +303,7 @@ table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
     pvalue = format.pval(pvalue, eps=0.001, digits=2),
     CI = paste(lower, ' to ', upper, sep='')) %>%
   select(Variable, OR, CI, pvalue)
+## Table S4 for paper's web appendix ##
 ftab = flextable(table) %>%
   theme_box() %>%
   autofit()
@@ -355,7 +339,7 @@ The table below shows the main effects and interaction for the race by treatment
 ```{r}
 ## 
 source('1_bayes_model_race_interaction.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_race.RData")
 table = filter(alpha, chain==99) 
 table$Variable = colnames(X)
@@ -373,6 +357,7 @@ table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
     pvalue = format.pval(pvalue, eps=0.001, digits=2),
     CI = paste(lower, ' to ', upper, sep='')) %>%
   select(Variable, OR, CI, pvalue)
+## Table S5 for paper's web appendix ##
 ftab = flextable(table) %>%
   theme_box() %>%
   autofit()
@@ -413,7 +398,7 @@ The table below shows the main effects and interaction for the education by trea
 ```{r}
 ## 
 source('1_bayes_model_education_interaction.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_education.RData")
 table = filter(alpha, chain==99) 
 table$Variable = colnames(X)
@@ -431,6 +416,7 @@ table = filter(table, !str_detect(Variable, 'Intercept')) %>% # remove intercept
     pvalue = format.pval(pvalue, eps=0.001, digits=2),
     CI = paste(lower, ' to ', upper, sep='')) %>%
   select(Variable, OR, CI, pvalue)
+## Table S6 for paper's web appendix ##
 ftab = flextable(table) %>%
   theme_box() %>%
   autofit()
@@ -471,7 +457,7 @@ The table below shows the main effects and interaction for the trump vote by tre
 ```{r}
 ## 
 source('1_bayes_model_trump_interaction.R')
-# get results from lyra
+# get results from high-performance-computer
 load("//hpc-fs/barnetta/vaccine/jags_results_trump.RData")
 table = filter(alpha, chain==99) 
 table$Variable = colnames(X)
@@ -549,6 +535,7 @@ cplot = ggplot(data=combined, aes(y=labelf, x=mean, xmin=lower, xmax=upper, col=
   theme(legend.position='top',
         panel.grid.minor = element_blank())
 cplot
+## Figure 3 in paper ##
 jpeg('figures/bayes_interactions_OR.jpg', width=5.5, height=5, units='in', res=600)
 print(cplot)
 invisible(dev.off())
@@ -557,7 +544,7 @@ print(cplot)
 invisible(dev.off())
 ```
 
-#### Table of odds ratio estimates from above plot
+### Table of odds ratio estimates from above plot
 
 The table below gives the odds ratios and 95% credible intervals shown in the previous plot.
 
