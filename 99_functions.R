@@ -1,4 +1,6 @@
 # 99_functions.R
+# functions used in video analysis
+# July 2021
 
 # function for rounding numbers with zeros kept
 roundz = function(x, digits=0){
@@ -7,7 +9,7 @@ roundz = function(x, digits=0){
   return(x)
 }
 
-# function to rename columns
+# function to rename variables for tables and figures
 nice_rename = function(intext){
   out = case_when( # nicer variable name
     str_detect(intext, 'EducationMedium') ~ 'Education = Medium',
@@ -34,6 +36,7 @@ nice_rename = function(intext){
 # makes probabilities or odds ratios
 make_ests = function(design, chains, type='OR', 
                      ref = 'relative'){ # reference = relative (within-category) or fixed reference group
+  
   design = mutate(design, num = 1:n())
   design_long = pivot_longer(design, cols=starts_with('x')) %>%
     filter(value == 1) %>%
