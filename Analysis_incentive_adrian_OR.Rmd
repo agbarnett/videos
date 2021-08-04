@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = FALSE, dpi=500)
 library(tidyverse)
 library(dplyr)
 options(dplyr.summarise.inform=FALSE) # remove annoying warning
-library(dplyr) #
+library(nnet) # for multinom
 library(flextable) # for nice tables
 library(binom) # for confidence intervals
 library(xtable) # for exporting results to latex
@@ -582,6 +582,33 @@ png('figures/interactions_PR_fixed.png', width=5.5, height=4, units='in', res=60
 print(cplot)
 invisible(dev.off())
 ```
+
+### Test of treatment balance
+
+```{r}
+### Table S2 ###
+# centre age to 40 years and give to 10+ increase
+multi1 = multinom(Treatment2 ~ I(gender=="Male") + I((age-40)/10) + Race + Education + Trumphi, data = pretest_final)
+
+# nice table
+table = tidy(multi1, conf.int = TRUE) %>%
+  filter(!str_detect(term, 'Intercept')) %>% # exclude intercept
+  mutate(estimate = roundz(estimate, 2),
+         conf.low = roundz(conf.low, 2),
+         conf.high = roundz(conf.high, 2),
+         cell = paste(estimate, ' (', conf.low, ' to ', conf.high, ')', sep='')) %>%
+  select(term, y.level, cell) %>%
+  pivot_wider(values_from=cell, names_from=y.level)
+ftab = flextable(table) %>% # using flextable
+  theme_box() %>%
+  autofit()
+ftab
+# export to latex
+print(xtable(table, type = "latex"), file = "tableS2.tex", include.rownames=FALSE)
+#save_as_docx(ftab, path = 'balance_table.docx') # and export to word using flextable
+```
+
+Model predicting treatment group based on a range of predictors.
 
 ## For supplement: check of Bayesian model convergence
 
